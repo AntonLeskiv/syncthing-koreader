@@ -36,6 +36,25 @@ local pid_path = "/tmp/syncthing_koreader.pid"
 local config_path = "settings/syncthing/config.xml"
 local device_id_path = "settings/syncthing/device-id"
 
+-- Default ports, kept in sync with Syncthing upstream defaults:
+--   * Web GUI / REST API: 8384 (TCP)
+--   * Sync protocol listener: 22000 (TCP and UDP/QUIC)
+--   * Local discovery broadcasts: 21027/21026 (UDP)
+local DEFAULT_GUI_PORT = 8384
+local SYNC_LISTEN_PORT = 22000
+-- Ports owned by the sync/discovery listeners that the Web GUI must never
+-- collide with, otherwise connections break with "address already in use".
+local RESERVED_PORTS = {
+    [21026] = true,
+    [21027] = true,
+    [SYNC_LISTEN_PORT] = true,
+}
+
+local function isValidGuiPort(port)
+    port = tonumber(port)
+    return port ~= nil and port >= 1 and port <= 65535 and not RESERVED_PORTS[port]
+end
+
 -- os.execute invokes a shell, so every value passed to the launcher must be
 -- quoted as one shell argument. In particular, KOReader's home directory can
 -- contain spaces (for example, "Kindle Library").
@@ -105,9 +124,10 @@ function Syncthing:start(password)
     if os.execute(cmd) == 0 then
         local info = InfoMessage:new{
                 timeout = 10,
-                -- @translators: %1 is the Syncthing port, %2 is the network info.
-                text = T(_("Syncthing started.\n\nSyncthing port: %1\n%2"),
+                -- @translators: %1 is the Web GUI port, %2 is the sync listen port, %3 is the network info.
+                text = T(_("Syncthing started.\n\nWeb GUI port: %1\nSync listen port: %2\n%3"),
                     self.syncthing_port,
+                    SYNC_LISTEN_PORT,
                     Device.retrieveNetworkInfo and Device:retrieveNetworkInfo() or _("Could not retrieve network info.")),
         }
         UIManager:show(info)
@@ -227,7 +247,7 @@ end
 
 function Syncthing:show_port_dialog(touchmenu_instance)
     self.port_dialog = InputDialog:new{
-        title = _("Choose Syncthing port"),
+        title = _("Choose Syncthing Web GUI port"),
         input = self.syncthing_port,
         input_type = "number",
         input_hint = self.syncthing_port,
@@ -245,12 +265,22 @@ function Syncthing:show_port_dialog(touchmenu_instance)
                     is_enter_default = true,
                     callback = function()
                         local value = tonumber(self.port_dialog:getInputText())
-                        if value and value >= 0 then
-                            self.syncthing_port = value
-                            G_reader_settings:saveSetting("syncthing_port", self.syncthing_port)
-                            UIManager:close(self.port_dialog)
-                            touchmenu_instance:updateItems()
+                        if not value or value < 1 or value > 65535 then
+                            return
                         end
+                        if RESERVED_PORTS[value] then
+                            UIManager:show(InfoMessage:new{
+                                icon = "notice-warning",
+                                -- @translators: %1 is the rejected port number, %2 is the default Web GUI port.
+                                text = T(_("Port %1 is reserved for the Syncthing sync listener.\nPlease use the default Web GUI port %2 or another free port."),
+                                    value, DEFAULT_GUI_PORT),
+                            })
+                            return
+                        end
+                        self.syncthing_port = value
+                        G_reader_settings:saveSetting("syncthing_port", self.syncthing_port)
+                        UIManager:close(self.port_dialog)
+                        touchmenu_instance:updateItems()
                     end,
                 },
             },
@@ -701,8 +731,10 @@ function Syncthing:addToMainMenu(menu_items)
                 callback = function()
                     local info = InfoMessage:new{
                         timeout = 60,
-                        text = T(_("Connect to port %1 for web GUI\nYou must set a password first! Default username: syncthing\n\n%2"),
+                        -- @translators: %1 is the Web GUI port, %2 is the sync listen port, %3 is the network info.
+                        text = T(_("Web GUI: http://<device IP>:%1\nUsername: syncthing (set a password first!)\nSync listen port: %2 (TCP/UDP)\n\n%3"),
                             self.syncthing_port,
+                            SYNC_LISTEN_PORT,
                             Device.retrieveNetworkInfo and Device:retrieveNetworkInfo() or _("Could not retrieve network info.")),
                     }
                     UIManager:show(info)
