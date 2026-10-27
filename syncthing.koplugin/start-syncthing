@@ -38,10 +38,18 @@ if [ ! -x "$RUN_BIN" ] || [ "$SRC_BIN" -nt "$RUN_BIN" ]; then
     chmod +x "$RUN_BIN"
 fi
 
+# Store SQLite database on native ext4 filesystem (/var/local) to avoid FAT32 locking/corruption errors
+data_dir="/var/local/syncthing-data"
+if [ ! -d "/var/local" ] || [ ! -w "/var/local" ]; then
+    data_dir="$config_dir"
+else
+    mkdir -p "$data_dir"
+fi
+
 if [ ! -f "$config_dir/config.xml" ] || [ -n "$password" ]; then
     echo "Generating Syncthing configuration..."
     HOME="$home_dir" SSL_CERT_FILE="$cacert" "$RUN_BIN" generate \
-        --data="$config_dir" \
+        --data="$data_dir" \
         --config="$config_dir" \
         --gui-user=syncthing \
         ${password:+--gui-password="$password"} \
@@ -51,12 +59,12 @@ fi
 # Save the device ID to a file for easy access from KOReader
 HOME="$home_dir" SSL_CERT_FILE="$cacert" "$RUN_BIN" device-id \
     --config="$config_dir" \
-    --data="$config_dir" > "$config_dir/device-id" 2>> "$startup_log" || true
+    --data="$data_dir" > "$config_dir/device-id" 2>> "$startup_log" || true
 
 echo "Launching Syncthing daemon on port $port..."
 HOME="$home_dir" SSL_CERT_FILE="$cacert" "$RUN_BIN" serve \
     --config="$config_dir" \
-    --data="$config_dir" \
+    --data="$data_dir" \
     --gui-address="http://0.0.0.0:$port" \
     --no-upgrade \
     --logfile="$config_dir/logs" \
