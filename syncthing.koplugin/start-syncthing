@@ -1,23 +1,18 @@
 #!/bin/sh
-set -e
 
 # Save config and data under the KOReader runtime directory
-config_dir=settings/syncthing
-syncthing=plugins/syncthing.koplugin/syncthing
-cacert=plugins/syncthing.koplugin/cacert.pem
-pid_file=/tmp/syncthing_koreader.pid
+config_dir="settings/syncthing"
+mkdir -p "$config_dir"
+cacert="plugins/syncthing.koplugin/cacert.pem"
+pid_file="/tmp/syncthing_koreader.pid"
+startup_log="$config_dir/startup.log"
 
-if [ -n "$1" ]; then
-    home_dir=$1
-else
-    home_dir=/
-fi
+exec >> "$startup_log" 2>&1
+echo "=== Starting Syncthing at $(date) ==="
 
-if [ -n "$2" ]; then
-    port=$2
-else
-    port=8384
-fi
+home_dir="${1:-/}"
+port="${2:-8384}"
+password="$3"
 
 case "$port" in
     ''|*[!0-9]*)
@@ -26,35 +21,40 @@ case "$port" in
         ;;
 esac
 
-if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
-    echo "Invalid Syncthing port: $port" >&2
-    exit 2
+# Stage binary to tmpfs (/var/tmp) to bypass FAT32 noexec/permissions limitations on Kindle
+TMP_DIR="/var/tmp/syncthing-koreader"
+mkdir -p "$TMP_DIR"
+SRC_BIN="plugins/syncthing.koplugin/syncthing"
+
+if [ ! -f "$SRC_BIN" ]; then
+    echo "ERROR: Syncthing binary not found at $SRC_BIN" >&2
+    exit 1
 fi
 
-if [ -n "$3" ]; then
-    password=$3
+RUN_BIN="$TMP_DIR/syncthing"
+if [ ! -x "$RUN_BIN" ] || [ "$SRC_BIN" -nt "$RUN_BIN" ]; then
+    echo "Staging syncthing binary to $RUN_BIN..."
+    cp "$SRC_BIN" "$RUN_BIN"
+    chmod +x "$RUN_BIN"
 fi
 
 if [ ! -f "$config_dir/config.xml" ] || [ -n "$password" ]; then
     echo "Generating Syncthing configuration..."
-    # Set HOME so that the default folder is created at $home_dir/Sync
-    HOME="$home_dir" SSL_CERT_FILE="$cacert" "$syncthing" generate \
+    HOME="$home_dir" SSL_CERT_FILE="$cacert" "$RUN_BIN" generate \
         --data="$config_dir" \
         --config="$config_dir" \
         --gui-user=syncthing \
-        --gui-password="$password" \
-        --no-port-probing # Need this due to lack of IPv4 loopback in Kobo
+        ${password:+--gui-password="$password"} \
+        --no-port-probing 2>> "$startup_log" || true
 fi
 
 # Save the device ID to a file for easy access from KOReader
-SSL_CERT_FILE="$cacert" "$syncthing" device-id \
+HOME="$home_dir" SSL_CERT_FILE="$cacert" "$RUN_BIN" device-id \
     --config="$config_dir" \
-    --data="$config_dir" > "$config_dir/device-id"
+    --data="$config_dir" > "$config_dir/device-id" 2>> "$startup_log" || true
 
-# We need to listen to 0.0.0.0 so that the GUI is accessible over the network
-# Keep the bundled executable and its configuration format in lockstep. A
-# self-upgrade can leave a newer config behind if an older plugin is installed.
-SSL_CERT_FILE="$cacert" "$syncthing" serve \
+echo "Launching Syncthing daemon on port $port..."
+HOME="$home_dir" SSL_CERT_FILE="$cacert" "$RUN_BIN" serve \
     --config="$config_dir" \
     --data="$config_dir" \
     --gui-address="http://0.0.0.0:$port" \
@@ -63,5 +63,5 @@ SSL_CERT_FILE="$cacert" "$syncthing" serve \
     --log-max-old-files=10 \
     --log-max-size=1048576 &
 
-# Write the PID to be used for stopping Syncthing later
 echo $! > "$pid_file"
+echo "Syncthing started with PID $(cat "$pid_file")"
