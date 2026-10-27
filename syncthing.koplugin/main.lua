@@ -1,7 +1,9 @@
 local DataStorage = require("datastorage")
 local Device =  require("device")
 local Dispatcher = require("dispatcher")
-local InfoMessage = require("ui/widget/infomessage")  -- luacheck:ignore
+local InfoMessage = require("ui/widget/infomessage")
+local ConfirmBox = require("ui/widget/confirmbox")
+local Notification = require("ui/widget/notification")  -- luacheck:ignore
 local QRMessage = require("ui/widget/qrmessage")
 local InputDialog = require("ui/widget/inputdialog")
 local UIManager = require("ui/uimanager")
@@ -89,9 +91,9 @@ function Syncthing:start(password)
         os.execute(string.format("%s %s %s",
             "iptables -A OUTPUT -p tcp --sport", self.syncthing_port,
             "-m conntrack --ctstate ESTABLISHED -j ACCEPT"))
-	os.execute("iptables -A INPUT -i wlan0 -p tcp --dport 22000 -j ACCEPT")
-	os.execute("iptables -A INPUT -i wlan0 -p udp --dport 22000 -j ACCEPT")
-	os.execute("iptables -A INPUT -i wlan0 -p udp --dport 21027 -j ACCEPT")
+	os.execute("iptables -A INPUT -p tcp --dport 22000 -j ACCEPT")
+	os.execute("iptables -A INPUT -p udp --dport 22000 -j ACCEPT")
+	os.execute("iptables -A INPUT -p udp --dport 21027 -j ACCEPT")
     end
 
     if not util.pathExists(path.."/settings/syncthing/") then
@@ -572,6 +574,95 @@ function Syncthing:getPendingMenu()
     end
 
     return sub_item_table
+end
+
+function Syncthing:checkBinaryUpdate(silent, callback)
+    local update_script = "./plugins/syncthing.koplugin/update-syncthing"
+    if not util.pathExists(update_script) then
+        if not silent then
+            UIManager:show(InfoMessage:new{ text = _("Update script not found.") })
+        end
+        return
+    end
+
+    if not silent then
+        UIManager:show(Notification:new{
+            text = _("Checking for Syncthing updates..."),
+            timeout = 3,
+        })
+    end
+
+    local handle = io.popen(string.format("/bin/sh %s check", shell_quote(update_script)))
+    if not handle then return end
+    local output = handle:read("*a") or ""
+    handle:close()
+
+    local current = output:match("CURRENT=([^\r\n]+)") or "unknown"
+    local latest = output:match("LATEST=([^\r\n]+)") or "unknown"
+    local available = output:match("UPDATE_AVAILABLE=yes") ~= nil
+
+    if available and latest ~= "unknown" then
+        UIManager:show(ConfirmBox:new{
+            text = string.format(
+                _("A new Syncthing binary is available!\n\nCurrent: %s\nLatest: %s\n\nDo you want to download and install the update?"),
+                current, latest
+            ),
+            ok_text = _("Update"),
+            cancel_text = _("Cancel"),
+            ok_callback = function()
+                self:updateBinary(callback)
+            end,
+        })
+    else
+        if not silent then
+            UIManager:show(InfoMessage:new{
+                text = string.format(_("Syncthing is up to date.\n\nCurrent version: %s"), current),
+            })
+        end
+    end
+end
+
+function Syncthing:updateBinary(callback)
+    local update_script = "./plugins/syncthing.koplugin/update-syncthing"
+    local was_running = self:isRunning()
+
+    if was_running then
+        self:stop()
+    end
+
+    UIManager:show(Notification:new{
+        text = _("Downloading and updating Syncthing binary..."),
+        timeout = 5,
+    })
+
+    UIManager:scheduleIn(0.5, function()
+        local handle = io.popen(string.format("/bin/sh %s update", shell_quote(update_script)))
+        local output = ""
+        if handle then
+            output = handle:read("*a") or ""
+            handle:close()
+        end
+
+        local success = output:find("SUCCESS:") ~= nil
+
+        if was_running then
+            self:start()
+        end
+
+        if success then
+            local new_ver = output:match("SUCCESS: Syncthing updated to ([^\r\n]+)") or ""
+            UIManager:show(InfoMessage:new{
+                text = string.format(_("Syncthing updated successfully!\n\nVersion: %s"), new_ver),
+            })
+        else
+            UIManager:show(InfoMessage:new{
+                icon = "notice-warning",
+                text = string.format(_("Failed to update Syncthing binary.\n\n%s"), output),
+            })
+        end
+
+        if callback then callback() end
+    end)
 end
 
 function Syncthing:addToMainMenu(menu_items)

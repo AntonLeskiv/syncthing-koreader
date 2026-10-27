@@ -1,0 +1,119 @@
+#!/bin/sh
+set -e
+
+PLUGIN_DIR="$(dirname "$0")"
+[ -z "$PLUGIN_DIR" ] && PLUGIN_DIR="plugins/syncthing.koplugin"
+cd "$PLUGIN_DIR"
+
+CACERT="cacert.pem"
+[ ! -f "$CACERT" ] && CACERT="/etc/ssl/certs/ca-certificates.crt"
+
+# Architecture detection
+ARCH="$(uname -m 2>/dev/null || echo "arm")"
+case "$ARCH" in
+    aarch64*|arm64*) SYNCTHING_ARCH="arm64" ;;
+    armv7*|armv6*|arm*) SYNCTHING_ARCH="arm" ;;
+    x86_64*|amd64*) SYNCTHING_ARCH="amd64" ;;
+    i*86) SYNCTHING_ARCH="386" ;;
+    *) SYNCTHING_ARCH="arm" ;;
+esac
+
+get_current_version() {
+    if [ -x "./syncthing" ]; then
+        ./syncthing --version 2>/dev/null | awk '{print $2}' | head -n 1
+    else
+        echo "unknown"
+    fi
+}
+
+get_latest_version() {
+    # Try curl first, then wget
+    LATEST_JSON=""
+    if command -v curl >/dev/null 2>&1; then
+        LATEST_JSON=$(curl -sL --cacert "$CACERT" -H "User-Agent: KOReader-Syncthing-Updater" \
+            "https://api.github.com/repos/syncthing/syncthing/releases/latest" 2>/dev/null || true)
+    fi
+    if [ -z "$LATEST_JSON" ] && command -v wget >/dev/null 2>&1; then
+        LATEST_JSON=$(wget -qO- --ca-certificate="$CACERT" --header="User-Agent: KOReader-Syncthing-Updater" \
+            "https://api.github.com/repos/syncthing/syncthing/releases/latest" 2>/dev/null || true)
+    fi
+
+    # Extract tag_name from JSON
+    echo "$LATEST_JSON" | grep -o '"tag_name": *"[^"]*"' | head -n 1 | cut -d '"' -f 4
+}
+
+case "$1" in
+    check)
+        CURRENT=$(get_current_version)
+        LATEST=$(get_latest_version)
+        if [ -z "$LATEST" ]; then
+            echo "ERROR: Could not fetch latest version from GitHub"
+            exit 1
+        fi
+        echo "CURRENT=$CURRENT"
+        echo "LATEST=$LATEST"
+        if [ "$CURRENT" = "$LATEST" ]; then
+            echo "UPDATE_AVAILABLE=no"
+        else
+            echo "UPDATE_AVAILABLE=yes"
+        fi
+        ;;
+
+    update)
+        CURRENT=$(get_current_version)
+        LATEST=$(get_latest_version)
+        if [ -z "$LATEST" ]; then
+            echo "ERROR: Could not fetch latest version from GitHub"
+            exit 1
+        fi
+
+        TARBALL="syncthing-linux-${SYNCTHING_ARCH}-${LATEST}.tar.gz"
+        URL="https://github.com/syncthing/syncthing/releases/download/${LATEST}/${TARBALL}"
+
+        TMP_DIR="/tmp/syncthing-update-$$"
+        mkdir -p "$TMP_DIR"
+        trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+
+        echo "Downloading $URL..."
+        DOWNLOAD_OK=0
+        if command -v curl >/dev/null 2>&1; then
+            if curl -f -sL --cacert "$CACERT" -H "User-Agent: KOReader-Syncthing-Updater" \
+                -o "$TMP_DIR/$TARBALL" "$URL"; then
+                DOWNLOAD_OK=1
+            fi
+        fi
+        if [ "$DOWNLOAD_OK" -eq 0 ] && command -v wget >/dev/null 2>&1; then
+            if wget -q --ca-certificate="$CACERT" --header="User-Agent: KOReader-Syncthing-Updater" \
+                -O "$TMP_DIR/$TARBALL" "$URL"; then
+                DOWNLOAD_OK=1
+            fi
+        fi
+
+        if [ "$DOWNLOAD_OK" -ne 1 ] || [ ! -s "$TMP_DIR/$TARBALL" ]; then
+            echo "ERROR: Failed to download $URL"
+            exit 2
+        fi
+
+        echo "Extracting..."
+        tar -xzf "$TMP_DIR/$TARBALL" -C "$TMP_DIR"
+
+        EXTRACTED_BIN=$(find "$TMP_DIR" -type f -name "syncthing" | head -n 1)
+        if [ -z "$EXTRACTED_BIN" ] || [ ! -f "$EXTRACTED_BIN" ]; then
+            echo "ERROR: syncthing binary not found in archive"
+            exit 3
+        fi
+
+        echo "Installing new syncthing binary..."
+        cp "$EXTRACTED_BIN" "./syncthing.new"
+        chmod +x "./syncthing.new"
+        mv -f "./syncthing.new" "./syncthing"
+
+        NEW_VERSION=$(get_current_version)
+        echo "SUCCESS: Syncthing updated to $NEW_VERSION"
+        ;;
+
+    *)
+        echo "Usage: $0 {check|update}"
+        exit 1
+        ;;
+esac
