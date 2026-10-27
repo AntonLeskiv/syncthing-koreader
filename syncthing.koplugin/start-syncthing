@@ -11,13 +11,19 @@ exec >> "$startup_log" 2>&1
 echo "=== Starting Syncthing at $(date) ==="
 
 home_dir="${1:-/}"
+# Default ports: Web GUI 8384, Sync Engine 22000
 port="${2:-8384}"
 password="$3"
 
+# Enforce default GUI port 8384 if empty or mistakenly set to sync port 22000
+if [ "$port" = "22000" ] || [ -z "$port" ]; then
+    port="8384"
+fi
+
 case "$port" in
     ''|*[!0-9]*)
-        echo "Invalid Syncthing port: $port" >&2
-        exit 2
+        echo "Invalid Syncthing port: $port, falling back to default 8384" >&2
+        port="8384"
         ;;
 esac
 

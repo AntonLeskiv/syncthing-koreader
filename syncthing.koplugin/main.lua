@@ -44,7 +44,9 @@ local function shell_quote(value)
 end
 
 function Syncthing:init()
-    self.syncthing_port = G_reader_settings:readSetting("syncthing_port") or "8384"
+    self.syncthing_port = "8384"
+    self.sync_port = "22000"
+    G_reader_settings:saveSetting("syncthing_port", "8384")
     self.autostart = G_reader_settings:isTrue("syncthing_autostart")
     self.ui.menu:registerToMainMenu(self)
     self:onDispatcherRegisterActions()
@@ -178,9 +180,9 @@ function Syncthing:stopPlugin(force)
         os.execute(string.format("%s %s %s",
             "iptables -D OUTPUT -p tcp --sport", self.syncthing_port,
             "-m conntrack --ctstate ESTABLISHED -j ACCEPT"))
-        os.execute("iptables -D INPUT -i wlan0 -p tcp --dport 22000 -j ACCEPT")
-        os.execute("iptables -D INPUT -i wlan0 -p udp --dport 22000 -j ACCEPT")
-        os.execute("iptables -D INPUT -i wlan0 -p udp --dport 21027 -j ACCEPT")
+        os.execute("iptables -D INPUT -p tcp --dport 22000 -j ACCEPT")
+        os.execute("iptables -D INPUT -p udp --dport 22000 -j ACCEPT")
+        os.execute("iptables -D INPUT -p udp --dport 21027 -j ACCEPT")
     end
 
     if not isProcAlive(pid) then
@@ -682,12 +684,14 @@ function Syncthing:addToMainMenu(menu_items)
             },
             {
                 text_func = function()
-                    return T(_("Syncthing Port: %1"), self.syncthing_port)
+                    return T(_("Ports: GUI 8384 / Sync 22000"))
                 end,
                 keep_menu_open = true,
-                enabled_func = function() return not self:isRunning() end,
-                callback = function(touchmenu_instance)
-                    self:show_port_dialog(touchmenu_instance)
+                callback = function()
+                    local info = InfoMessage:new{
+                        text = _("Syncthing Default Ports:\n\n• Web GUI / API: 8384 (HTTP)\n• Sync Engine: 22000 (TCP/QUIC)\n• Local Discovery: 21027 (UDP)\n\nBoth the sync engine and web interface run on their official default ports."),
+                    }
+                    UIManager:show(info)
                 end,
             },
             {
