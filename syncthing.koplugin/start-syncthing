@@ -62,6 +62,16 @@ if [ ! -f "$config_dir/config.xml" ] || [ -n "$password" ]; then
         --no-port-probing 2>> "$startup_log" || true
 fi
 
+# Force the sync protocol listener back to its default port. The special
+# value "default" expands to tcp://0.0.0.0:22000, quic://0.0.0.0:22000 plus
+# dynamic relays. A previously customised <listenAddress> in config.xml would
+# otherwise keep peers from connecting on the standard port 22000.
+if [ -f "$config_dir/config.xml" ]; then
+    sed -i 's|<listenAddress>[^<]*</listenAddress>|<listenAddress>default</listenAddress>|' \
+        "$config_dir/config.xml" 2>> "$startup_log" \
+        && echo "Sync listen address reset to default (tcp://0.0.0.0:22000, quic://0.0.0.0:22000)."
+fi
+
 # Save the device ID to a file for easy access from KOReader
 HOME="$home_dir" SSL_CERT_FILE="$cacert" "$RUN_BIN" device-id \
     --config="$config_dir" \

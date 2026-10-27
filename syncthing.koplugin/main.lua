@@ -42,18 +42,6 @@ local device_id_path = "settings/syncthing/device-id"
 --   * Local discovery broadcasts: 21027/21026 (UDP)
 local DEFAULT_GUI_PORT = 8384
 local SYNC_LISTEN_PORT = 22000
--- Ports owned by the sync/discovery listeners that the Web GUI must never
--- collide with, otherwise connections break with "address already in use".
-local RESERVED_PORTS = {
-    [21026] = true,
-    [21027] = true,
-    [SYNC_LISTEN_PORT] = true,
-}
-
-local function isValidGuiPort(port)
-    port = tonumber(port)
-    return port ~= nil and port >= 1 and port <= 65535 and not RESERVED_PORTS[port]
-end
 
 -- os.execute invokes a shell, so every value passed to the launcher must be
 -- quoted as one shell argument. In particular, KOReader's home directory can
@@ -63,9 +51,14 @@ local function shell_quote(value)
 end
 
 function Syncthing:init()
-    self.syncthing_port = "8384"
-    self.sync_port = "22000"
-    G_reader_settings:saveSetting("syncthing_port", "8384")
+    -- Always run on Syncthing's default ports: the Web GUI/REST API listens
+    -- on 8384 and the sync protocol on 22000 (TCP/UDP). Any custom GUI port
+    -- left over in settings is discarded to prevent port conflicts.
+    self.syncthing_port = DEFAULT_GUI_PORT
+    self.sync_port = SYNC_LISTEN_PORT
+    if tonumber(G_reader_settings:readSetting("syncthing_port")) ~= DEFAULT_GUI_PORT then
+        G_reader_settings:saveSetting("syncthing_port", DEFAULT_GUI_PORT)
+    end
     self.autostart = G_reader_settings:isTrue("syncthing_autostart")
     self.ui.menu:registerToMainMenu(self)
     self:onDispatcherRegisterActions()
@@ -243,51 +236,6 @@ function Syncthing:onToggleSyncthingServer(callback)
             safe_callback()
         end)
     end
-end
-
-function Syncthing:show_port_dialog(touchmenu_instance)
-    self.port_dialog = InputDialog:new{
-        title = _("Choose Syncthing Web GUI port"),
-        input = self.syncthing_port,
-        input_type = "number",
-        input_hint = self.syncthing_port,
-        buttons = {
-            {
-                {
-                    text = _("Cancel"),
-                    id = "close",
-                    callback = function()
-                        UIManager:close(self.port_dialog)
-                    end,
-                },
-                {
-                    text = _("Save"),
-                    is_enter_default = true,
-                    callback = function()
-                        local value = tonumber(self.port_dialog:getInputText())
-                        if not value or value < 1 or value > 65535 then
-                            return
-                        end
-                        if RESERVED_PORTS[value] then
-                            UIManager:show(InfoMessage:new{
-                                icon = "notice-warning",
-                                -- @translators: %1 is the rejected port number, %2 is the default Web GUI port.
-                                text = T(_("Port %1 is reserved for the Syncthing sync listener.\nPlease use the default Web GUI port %2 or another free port."),
-                                    value, DEFAULT_GUI_PORT),
-                            })
-                            return
-                        end
-                        self.syncthing_port = value
-                        G_reader_settings:saveSetting("syncthing_port", self.syncthing_port)
-                        UIManager:close(self.port_dialog)
-                        touchmenu_instance:updateItems()
-                    end,
-                },
-            },
-        },
-    }
-    UIManager:show(self.port_dialog)
-    self.port_dialog:onShowKeyboard()
 end
 
 -- Function copied from newsdownloader.plugin
@@ -714,7 +662,7 @@ function Syncthing:addToMainMenu(menu_items)
             },
             {
                 text_func = function()
-                    return T(_("Ports: GUI 8384 / Sync 22000"))
+                    return T(_("Ports: GUI %1 / Sync %2"), DEFAULT_GUI_PORT, SYNC_LISTEN_PORT)
                 end,
                 keep_menu_open = true,
                 callback = function()

@@ -25,6 +25,23 @@ This plugin runs a native [Syncthing](https://syncthing.net) instance directly o
 
 ---
 
+## Default Ports
+
+The plugin always runs Syncthing on its **official default ports**:
+
+| Purpose | Port | Protocol |
+| --- | --- | --- |
+| Web GUI / REST API | `8384` | TCP (HTTP) |
+| Sync protocol listener | `22000` | TCP + UDP (QUIC) |
+| Local discovery broadcast | `21027` | UDP |
+
+On every start, the plugin resets any customised GUI port stored in KOReader
+settings and any customised `<listenAddress>` stored in `config.xml` back to
+these defaults, so the Web GUI and the sync listener can never collide on the
+same port.
+
+---
+
 ## Installation
 
 1. Download the latest release or clone this repository.
